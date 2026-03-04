@@ -3,7 +3,7 @@ set -euo pipefail
 
 # sync.sh — Fetch PS1 artwork from upstream sources, organize by serial number.
 # Idempotent: skips existing files unless --force is passed.
-# Requires: git, ImageMagick (convert/magick), curl
+# Requires: git, ImageMagick (convert/magick), curl, rsync
 
 FORCE=false
 [[ "${1:-}" == "--force" ]] && FORCE=true
@@ -74,26 +74,15 @@ encode_name() {
   echo "$name" | sed 's/[&*\/:\\<>?|]/_/g'
 }
 
-# ── 1. Copy covers ─────────────────────────────────────────────────────────
+# ── 1. Rsync covers ────────────────────────────────────────────────────────
 echo ""
-echo "=== Copying covers ==="
-covers_copied=0
-covers_skipped=0
+echo "=== Syncing covers ==="
 covers_dir="$CACHE/psx-covers/covers/default"
+RSYNC_OPTS=(-av --include='*.jpg' --exclude='*')
+[[ "$FORCE" == false ]] && RSYNC_OPTS+=(--ignore-existing)
 if [[ -d "$covers_dir" ]]; then
-  for src in "$covers_dir"/*.jpg; do
-    [[ -f "$src" ]] || continue
-    filename="$(basename "$src")"
-    dest="$ROOT/covers/$filename"
-    if [[ -f "$dest" ]] && [[ "$FORCE" == false ]]; then
-      ((covers_skipped++))
-      continue
-    fi
-    cp "$src" "$dest"
-    ((covers_copied++))
-  done
+  rsync "${RSYNC_OPTS[@]}" "$covers_dir/" "$ROOT/covers/"
 fi
-echo "Covers: $covers_copied copied, $covers_skipped skipped (already exist)"
 
 # ── 2. Convert screenshots (Named_Snaps) ───────────────────────────────────
 echo ""
