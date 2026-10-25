@@ -1,14 +1,16 @@
 # psx-artwork
 
-PS1 game artwork served by serial number via `raw.githubusercontent.com`. A single CORS-friendly source for front covers, screenshots, and title screens — all keyed by hyphenated serial (e.g. `SLUS-00896`).
+PS1 and PSP game artwork served by serial number via `raw.githubusercontent.com`. A single CORS-friendly source for front covers, screenshots, and title screens — all keyed by hyphenated serial (e.g. `SLUS-00896`, `ULUS-10277`).
+
+Both systems share one tree. PS1 and PSP serials never collide, so a lookup by serial works the same for either.
 
 ## Image Types
 
-| Directory       | Content              | Source                     |
-|-----------------|----------------------|----------------------------|
-| `covers/`       | Front box art        | xlenore/psx-covers         |
-| `screenshots/`  | Gameplay screenshots | libretro-thumbnails        |
-| `titles/`       | Title screen captures| libretro-thumbnails        |
+| Directory       | Content              | PS1 source                 | PSP source                 |
+|-----------------|----------------------|----------------------------|----------------------------|
+| `covers/`       | Front box art        | xlenore/psx-covers         | libretro-thumbnails        |
+| `screenshots/`  | Gameplay screenshots | libretro-thumbnails        | libretro-thumbnails        |
+| `titles/`       | Title screen captures| libretro-thumbnails        | libretro-thumbnails        |
 
 ## URL Pattern
 
@@ -46,13 +48,14 @@ Prerequisites: `git`, `curl`, `ImageMagick`
 ./scripts/sync.sh --force  # re-convert even if files exist
 ```
 
-The script clones upstream repos to `.cache/`, parses the redump DAT for serial-to-name mapping, copies covers, and converts libretro-thumbnails PNGs to JPEG.
+The script clones upstream repos to `.cache/`, parses the PS1 and PSP redump DATs for serial-to-name mapping, copies PS1 covers, and converts libretro-thumbnails PNGs to JPEG. PSP serials outside the usual `ABCD-12345` shape (promo and dev discs) are skipped.
 
 ## Credits
 
 - **[xlenore/psx-covers](https://github.com/xlenore/psx-covers)** — PS1 cover artwork (sourced from psxdatacenter.com / duckstation.org)
-- **[libretro-thumbnails/Sony - PlayStation](https://github.com/libretro-thumbnails/Sony_-_PlayStation)** — Screenshots and title screens
-- **[libretro/libretro-database](https://github.com/libretro/libretro-database)** — Serial → game name mapping (redump DAT, CC BY-SA 4.0)
+- **[libretro-thumbnails/Sony - PlayStation](https://github.com/libretro-thumbnails/Sony_-_PlayStation)** — PS1 screenshots and title screens
+- **[libretro-thumbnails/Sony - PlayStation Portable](https://github.com/libretro-thumbnails/Sony_-_PlayStation_Portable)** — PSP covers, screenshots and title screens
+- **[libretro/libretro-database](https://github.com/libretro/libretro-database)** — Serial → game name mapping (redump DATs, CC BY-SA 4.0)
 
 ## Disclaimer
 

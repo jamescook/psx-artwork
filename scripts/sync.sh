@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# sync.sh — Fetch PS1 artwork from upstream sources, organize by serial number.
+# sync.sh — Fetch PS1 and PSP artwork from upstream sources, organize by serial number.
 # Idempotent: skips existing files unless --force is passed.
 # Requires: git, ImageMagick (convert/magick), curl, rsync
 # Compatible with bash 3.2+ (macOS default).
@@ -18,6 +18,10 @@ set -euo pipefail
 #
 # PREFIX = letters before the hyphen (SLUS, SCES, etc.)
 # DIGITS = first 3 digits after the hyphen (008, 941, etc.)
+#
+# PS1 and PSP share the same tree. Their serials never collide (PSP uses
+# ULUS, ULES, ULJM, UCUS, ... prefixes), so consumers keyed by serial need
+# no platform switch.
 
 FORCE=false
 SERIAL_FILTER=""
@@ -75,9 +79,10 @@ clone_or_pull() {
 if [[ -z "$SERIAL_FILTER" ]]; then
   clone_or_pull "https://github.com/xlenore/psx-covers.git" "$CACHE/psx-covers"
   clone_or_pull "https://github.com/libretro-thumbnails/Sony_-_PlayStation.git" "$CACHE/libretro-thumbnails"
+  clone_or_pull "https://github.com/libretro-thumbnails/Sony_-_PlayStation_Portable.git" "$CACHE/libretro-thumbnails-psp"
 else
   # Verify cache dirs exist for serial mode
-  for d in "$CACHE/psx-covers" "$CACHE/libretro-thumbnails"; do
+  for d in "$CACHE/psx-covers" "$CACHE/libretro-thumbnails" "$CACHE/libretro-thumbnails-psp"; do
     if [[ ! -d "$d" ]]; then
       echo "Cache not found: $d — run a full sync first" >&2
       exit 1
@@ -85,50 +90,74 @@ else
   done
 fi
 
-# ── Fetch DAT file ──────────────────────────────────────────────────────────
-DAT="$CACHE/Sony - PlayStation.dat"
-if [[ -z "$SERIAL_FILTER" ]] || [[ ! -f "$DAT" ]]; then
-  echo "Fetching serial→name DAT file ..."
-  curl -sL "https://raw.githubusercontent.com/libretro/libretro-database/master/metadat/redump/Sony%20-%20PlayStation.dat" -o "$DAT"
-fi
+# ── Helper: fetch a redump DAT file ─────────────────────────────────────────
+fetch_dat() {
+  local system="$1" dat="$2"
+  if [[ -z "$SERIAL_FILTER" ]] || [[ ! -f "$dat" ]]; then
+    echo "Fetching $system serial→name DAT file ..."
+    curl -sL "https://raw.githubusercontent.com/libretro/libretro-database/master/metadat/redump/${system// /%20}.dat" -o "$dat"
+  fi
+}
 
-# ── Parse DAT file: build serial→name TSV ───────────────────────────────────
-MAP_FILE="$CACHE/serial_map.tsv"
-if [[ -z "$SERIAL_FILTER" ]] || [[ ! -f "$MAP_FILE" ]]; then
-  awk '
-    /^[[:space:]]*name[[:space:]]+"/ {
-      sub(/^[^"]*"/, "")
-      sub(/"[^"]*$/, "")
-      name = $0
-    }
-    /^[[:space:]]*serial[[:space:]]+"/ {
-      sub(/^[^"]*"/, "")
-      sub(/"[^"]*$/, "")
-      n = split($0, serials, ",")
-      for (i = 1; i <= n; i++) {
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", serials[i])
-        if (serials[i] != "" && name != "") {
-          gsub(/\//, "_", serials[i])
-          print serials[i] "\t" name
+# ── Helper: parse a DAT file into a serial→name TSV ─────────────────────────
+build_serial_map() {
+  local dat="$1" map="$2"
+  if [[ -z "$SERIAL_FILTER" ]] || [[ ! -f "$map" ]]; then
+    awk '
+      /^[[:space:]]*name[[:space:]]+"/ {
+        sub(/^[^"]*"/, "")
+        sub(/"[^"]*$/, "")
+        name = $0
+      }
+      /^[[:space:]]*serial[[:space:]]+"/ {
+        sub(/^[^"]*"/, "")
+        sub(/"[^"]*$/, "")
+        n = split($0, serials, ",")
+        for (i = 1; i <= n; i++) {
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", serials[i])
+          if (serials[i] != "" && name != "") {
+            gsub(/\//, "_", serials[i])
+            print serials[i] "\t" name
+          }
         }
       }
-    }
-  ' "$DAT" > "$MAP_FILE"
-fi
+    ' "$dat" > "$map"
+  fi
+}
 
-map_count=$(wc -l < "$MAP_FILE" | tr -d ' ')
-echo "Parsed $map_count serial→name mappings"
-
-# When filtering by serial, pre-filter the map to matching entries only
-if [[ -n "$SERIAL_FILTER" ]]; then
+# ── Helper: narrow a map to the --serial filter ─────────────────────────────
+# Prints the path of the map to use.
+filter_map() {
+  local map="$1"
+  if [[ -z "$SERIAL_FILTER" ]]; then
+    echo "$map"
+    return
+  fi
+  local filter_hyph filtered="${map%.tsv}_filtered.tsv"
   filter_hyph="$(echo "$SERIAL_FILTER" | sed 's/\([A-Z]*\)\([0-9]\)/\1-\2/' | sed 's/--/-/')"
-  FILTERED_MAP="$CACHE/serial_map_filtered.tsv"
-  grep "^${filter_hyph}" "$MAP_FILE" > "$FILTERED_MAP" || true
-  filtered_count=$(wc -l < "$FILTERED_MAP" | tr -d ' ')
-  echo "Filtered to $filtered_count entries matching $SERIAL_FILTER"
-  MAP_FILE="$FILTERED_MAP"
-  map_count="$filtered_count"
-fi
+  grep "^${filter_hyph}" "$map" > "$filtered" || true
+  echo "$filtered"
+}
+
+DAT="$CACHE/Sony - PlayStation.dat"
+MAP_FILE="$CACHE/serial_map.tsv"
+fetch_dat "Sony - PlayStation" "$DAT"
+build_serial_map "$DAT" "$MAP_FILE"
+MAP_FILE="$(filter_map "$MAP_FILE")"
+map_count=$(wc -l < "$MAP_FILE" | tr -d ' ')
+echo "Parsed $map_count PS1 serial→name mappings"
+
+# PSP serials outside the usual ABCD-12345 shape (NW10107630, KOEI-P0177,
+# HONEY-002, ...) are promo and dev discs; they would make odd directories
+# and libretro has little art for them, so they are left out.
+PSP_DAT="$CACHE/Sony - PlayStation Portable.dat"
+PSP_MAP_FILE="$CACHE/serial_map_psp.tsv"
+fetch_dat "Sony - PlayStation Portable" "$PSP_DAT"
+build_serial_map "$PSP_DAT" "$PSP_MAP_FILE.all"
+grep -E $'^[A-Z]{4}-[0-9]{5}\t' "$PSP_MAP_FILE.all" > "$PSP_MAP_FILE" || true
+PSP_MAP_FILE="$(filter_map "$PSP_MAP_FILE")"
+psp_map_count=$(wc -l < "$PSP_MAP_FILE" | tr -d ' ')
+echo "Parsed $psp_map_count PSP serial→name mappings"
 
 # ── Helper: encode game name to libretro-thumbnails filename ────────────────
 # Characters &*/:\`<>?| are replaced with _ in filenames
@@ -172,9 +201,51 @@ matches_filter() {
   [[ "$serial_norm" == "$filter_norm"* ]]
 }
 
-# ── 1. Copy covers (with nesting) ─────────────────────────────────────────
+# ── Helper: convert libretro thumbnails for every serial in a map ──────────
+# convert_thumbnails "screenshots" "$CACHE/libretro-thumbnails/Named_Snaps" "$MAP_FILE"
+# Sets conv_found, conv_skipped and conv_missing.
+convert_thumbnails() {
+  local category="$1" thumbs_dir="$2" map="$3"
+  local total i=0 serial name encoded dest src
+  total=$(wc -l < "$map" | tr -d ' ')
+  conv_found=0
+  conv_skipped=0
+  conv_missing=0
+  while IFS=$'\t' read -r serial name; do
+    ((i++)) || true
+    printf "\r\033[K  [%d/%d] %s" "$i" "$total" "$serial"
+
+    encoded="$(encode_name "$name")"
+    dest="$(serial_dest_path "$category" "$serial")"
+
+    if [[ -f "$dest" ]] && [[ "$FORCE" == false ]]; then
+      ((conv_skipped++)) || true
+      [[ "$DRY_RUN" == true ]] && echo "  SKIP (exists): $dest"
+      continue
+    fi
+
+    if src="$(find_thumbnail "$thumbs_dir" "$encoded" "$name")"; then
+      if [[ "$DRY_RUN" == true ]]; then
+        echo "  CONVERT: $src → $dest"
+        ((conv_found++)) || true
+      elif $CONVERT "$src" -quality 85 "$dest" 2>/dev/null; then
+        ((conv_found++)) || true
+      else
+        echo ""
+        echo "  WARN: failed to convert $src"
+        ((conv_missing++)) || true
+      fi
+    else
+      ((conv_missing++)) || true
+      [[ "$DRY_RUN" == true ]] && echo "  MISS: $serial ($name) — encoded: $encoded"
+    fi
+  done < "$map"
+  echo ""
+}
+
+# ── 1. Copy PS1 covers (with nesting) ─────────────────────────────────────
 echo ""
-echo "=== Syncing covers ==="
+echo "=== Syncing PS1 covers ==="
 covers_dir="$CACHE/psx-covers/covers/default"
 covers_copied=0
 covers_skipped=0
@@ -194,7 +265,7 @@ if [[ -d "$covers_dir" ]]; then
     covers_total=$(find "$covers_dir" -name '*.jpg' | wc -l | tr -d ' ')
     cover_files=("$covers_dir"/*.jpg)
   fi
-  for src in "${cover_files[@]}"; do
+  for src in "${cover_files[@]+"${cover_files[@]}"}"; do
     [[ -f "$src" ]] || continue
     ((covers_i++)) || true
     serial="$(basename "$src" .jpg)"
@@ -220,90 +291,50 @@ if [[ -d "$covers_dir" ]]; then
 fi
 echo "Covers: $covers_copied copied, $covers_skipped skipped"
 
-# ── 2. Convert screenshots (Named_Snaps) ───────────────────────────────────
+# ── 2. Convert PS1 screenshots (Named_Snaps) ───────────────────────────────
 echo ""
-echo "=== Processing screenshots ==="
-snaps_found=0
-snaps_skipped=0
-snaps_missing=0
-snaps_i=0
-while IFS=$'\t' read -r serial name; do
-  ((snaps_i++)) || true
-  printf "\r\033[K  [%d/%d] %s" "$snaps_i" "$map_count" "$serial"
+echo "=== Processing PS1 screenshots ==="
+convert_thumbnails "screenshots" "$CACHE/libretro-thumbnails/Named_Snaps" "$MAP_FILE"
+snaps_found=$conv_found; snaps_skipped=$conv_skipped
+echo "Screenshots: $conv_found converted, $conv_skipped skipped, $conv_missing missing/failed upstream"
 
-  encoded="$(encode_name "$name")"
-  dest="$(serial_dest_path "screenshots" "$serial")"
-
-  if [[ -f "$dest" ]] && [[ "$FORCE" == false ]]; then
-    ((snaps_skipped++)) || true
-    [[ "$DRY_RUN" == true ]] && echo "  SKIP (exists): $dest"
-    continue
-  fi
-
-  if src="$(find_thumbnail "$CACHE/libretro-thumbnails/Named_Snaps" "$encoded" "$name")"; then
-    if [[ "$DRY_RUN" == true ]]; then
-      echo "  CONVERT: $src → $dest"
-      ((snaps_found++)) || true
-    elif $CONVERT "$src" -quality 85 "$dest" 2>/dev/null; then
-      ((snaps_found++)) || true
-    else
-      echo ""
-      echo "  WARN: failed to convert $src"
-      ((snaps_missing++)) || true
-    fi
-  else
-    ((snaps_missing++)) || true
-    [[ "$DRY_RUN" == true ]] && echo "  MISS: $serial ($name) — encoded: $encoded"
-  fi
-done < "$MAP_FILE"
+# ── 3. Convert PS1 titles (Named_Titles) ───────────────────────────────────
 echo ""
-echo "Screenshots: $snaps_found converted, $snaps_skipped skipped, $snaps_missing missing/failed upstream"
+echo "=== Processing PS1 titles ==="
+convert_thumbnails "titles" "$CACHE/libretro-thumbnails/Named_Titles" "$MAP_FILE"
+titles_found=$conv_found; titles_skipped=$conv_skipped
+echo "Titles: $conv_found converted, $conv_skipped skipped, $conv_missing missing/failed upstream"
 
-# ── 3. Convert titles (Named_Titles) ───────────────────────────────────────
+# ── 4. Convert PSP covers, screenshots and titles ─────────────────────────
+# xlenore has no PSP cover set, so PSP covers come from libretro's boxarts.
 echo ""
-echo "=== Processing titles ==="
-titles_found=0
-titles_skipped=0
-titles_missing=0
-titles_i=0
-while IFS=$'\t' read -r serial name; do
-  ((titles_i++)) || true
-  printf "\r\033[K  [%d/%d] %s" "$titles_i" "$map_count" "$serial"
+echo "=== Processing PSP covers ==="
+convert_thumbnails "covers" "$CACHE/libretro-thumbnails-psp/Named_Boxarts" "$PSP_MAP_FILE"
+psp_covers=$((conv_found + conv_skipped))
+echo "Covers: $conv_found converted, $conv_skipped skipped, $conv_missing missing/failed upstream"
 
-  encoded="$(encode_name "$name")"
-  dest="$(serial_dest_path "titles" "$serial")"
-
-  if [[ -f "$dest" ]] && [[ "$FORCE" == false ]]; then
-    ((titles_skipped++)) || true
-    [[ "$DRY_RUN" == true ]] && echo "  SKIP (exists): $dest"
-    continue
-  fi
-
-  if src="$(find_thumbnail "$CACHE/libretro-thumbnails/Named_Titles" "$encoded" "$name")"; then
-    if [[ "$DRY_RUN" == true ]]; then
-      echo "  CONVERT: $src → $dest"
-      ((titles_found++)) || true
-    elif $CONVERT "$src" -quality 85 "$dest" 2>/dev/null; then
-      ((titles_found++)) || true
-    else
-      echo ""
-      echo "  WARN: failed to convert $src"
-      ((titles_missing++)) || true
-    fi
-  else
-    ((titles_missing++)) || true
-    [[ "$DRY_RUN" == true ]] && echo "  MISS: $serial ($name) — encoded: $encoded"
-  fi
-done < "$MAP_FILE"
 echo ""
-echo "Titles: $titles_found converted, $titles_skipped skipped, $titles_missing missing/failed upstream"
+echo "=== Processing PSP screenshots ==="
+convert_thumbnails "screenshots" "$CACHE/libretro-thumbnails-psp/Named_Snaps" "$PSP_MAP_FILE"
+psp_snaps=$((conv_found + conv_skipped))
+echo "Screenshots: $conv_found converted, $conv_skipped skipped, $conv_missing missing/failed upstream"
+
+echo ""
+echo "=== Processing PSP titles ==="
+convert_thumbnails "titles" "$CACHE/libretro-thumbnails-psp/Named_Titles" "$PSP_MAP_FILE"
+psp_titles=$((conv_found + conv_skipped))
+echo "Titles: $conv_found converted, $conv_skipped skipped, $conv_missing missing/failed upstream"
 
 # ── Summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "=== Summary ==="
-echo "Serial mappings: $map_count"
-echo "Covers:      $((covers_copied + covers_skipped)) total"
-echo "Screenshots: $((snaps_found + snaps_skipped)) found of $map_count"
-echo "Titles:      $((titles_found + titles_skipped)) found of $map_count"
+echo "PS1 serial mappings: $map_count"
+echo "  Covers:      $((covers_copied + covers_skipped)) total"
+echo "  Screenshots: $((snaps_found + snaps_skipped)) found of $map_count"
+echo "  Titles:      $((titles_found + titles_skipped)) found of $map_count"
+echo "PSP serial mappings: $psp_map_count"
+echo "  Covers:      $psp_covers found of $psp_map_count"
+echo "  Screenshots: $psp_snaps found of $psp_map_count"
+echo "  Titles:      $psp_titles found of $psp_map_count"
 [[ "$DRY_RUN" == true ]] && echo "(dry-run — no files were written)"
 echo "Done."
