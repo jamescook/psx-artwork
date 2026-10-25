@@ -44,11 +44,29 @@ const url = `https://raw.githubusercontent.com/${owner}/psx-artwork/main/${categ
 Prerequisites: `git`, `curl`, `ImageMagick`
 
 ```bash
-./scripts/sync.sh          # fetch and convert artwork
-./scripts/sync.sh --force  # re-convert even if files exist
+./scripts/sync.sh                     # fetch and convert new or changed artwork
+./scripts/sync.sh --dry-run           # show what would change
+./scripts/sync.sh --serial SLUS-00896 # one serial only
+./scripts/sync.sh --force             # re-convert everything
+./scripts/sync.sh --prune             # also delete orphaned outputs
 ```
 
-The script clones upstream repos to `.cache/`, parses the PS1 and PSP redump DATs for serial-to-name mapping, copies PS1 covers, and converts libretro-thumbnails PNGs to JPEG. PSP serials outside the usual `ABCD-12345` shape (promo and dev discs) are skipped.
+The script parses the PS1 and PSP redump DATs for serial-to-name mapping, copies PS1 covers, and converts libretro-thumbnails PNGs to JPEG. PSP serials outside the usual `ABCD-12345` shape (promo and dev discs) are skipped.
+
+### Cache and manifest
+
+Upstream repos are cloned into `.cache/git/` without file contents (`git clone --filter=blob:none`), so each clone holds only the file list and every file's git blob hash — a few MB rather than the 15+ GB of a full checkout. `.cache/` is always safe to delete.
+
+`manifest.tsv` records which upstream file each output was made from, one tab-separated row per output:
+
+```
+category  serial  source repo  upstream path  upstream blob hash
+```
+
+On each run the script compares upstream hashes with the manifest and downloads only images that are new or changed upstream. A clone that downloaded images is deleted at the end of the run.
+
+- **Orphans** are outputs that no upstream file matches any more, usually because the game was renamed in the DAT. Their images are usually still right, so they are listed in `.cache/work/orphans.txt` and deleted only with `--prune`.
+- **Broken upstream files** (a few libretro PNGs are truncated or empty) are recorded in `.cache/broken.tsv` and skipped until upstream replaces them.
 
 ## Credits
 
